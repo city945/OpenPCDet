@@ -62,6 +62,8 @@ def parse_config():
         args.epochs = 1 if args.epochs is None else args.epochs
         args.extra_tag = 'debug'
         cfg.DATA_CONFIG.DEBUG = True
+        if cfg.get('DATA_CONFIG_TAR', None):
+            cfg.DATA_CONFIG_TAR.DEBUG = True
 
     return args, cfg
 
@@ -82,14 +84,24 @@ class Trainer:
             total_epochs=args.epochs,
             seed=666 if args.fix_random_seed else None
         )
-        test_set, test_loader, sampler = build_dataloader(
-            dataset_cfg=cfg.DATA_CONFIG,
-            class_names=cfg.CLASS_NAMES,
-            batch_size=args.batch_size,
-            dist=self.dist_train, workers=args.workers, 
-            logger=self.logger, 
-            training=False,
-        )
+        if cfg.get('DATA_CONFIG_TAR', None):
+            test_set, test_loader, sampler = build_dataloader(
+                dataset_cfg=cfg.DATA_CONFIG_TAR,
+                class_names=cfg.DATA_CONFIG_TAR.CLASS_NAMES,
+                batch_size=args.batch_size,
+                dist=self.dist_train, workers=args.workers, 
+                logger=self.logger, 
+                training=False,
+            )
+        else:
+            test_set, test_loader, sampler = build_dataloader(
+                dataset_cfg=cfg.DATA_CONFIG,
+                class_names=cfg.CLASS_NAMES,
+                batch_size=args.batch_size,
+                dist=self.dist_train, workers=args.workers, 
+                logger=self.logger, 
+                training=False,
+            )
 
         # model && optimizer && scheduler
         model = build_network(model_cfg=cfg.MODEL, num_class=len(cfg.CLASS_NAMES), dataset=train_set)
@@ -395,6 +407,7 @@ class Trainer:
 
         self.logger.info(result_str)
         ret_dict.update(result_dict)
+        ret_dict['avg_pred_bboxes'] = total_pred_objects / max(1, len(det_annos))
 
         if self.tb_log is not None:
             for key, val in ret_dict.items():

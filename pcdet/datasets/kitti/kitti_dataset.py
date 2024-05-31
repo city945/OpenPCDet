@@ -5,7 +5,7 @@ import numpy as np
 from skimage import io
 
 from . import kitti_utils
-from ...utils import box_utils, calibration_kitti, common_utils, object3d_kitti
+from ...utils import box_utils, calibration_kitti, common_utils, object3d_kitti, self_training_utils
 from ..dataset import DatasetTemplate
 
 
@@ -124,7 +124,7 @@ class KittiDataset(DatasetTemplate):
         return plane
 
     @staticmethod
-    def get_fov_flag(pts_rect, img_shape, calib):
+    def get_fov_flag(pts_rect, img_shape, calib, margin=0):
         """
         Args:
             pts_rect:
@@ -135,15 +135,14 @@ class KittiDataset(DatasetTemplate):
 
         """
         pts_img, pts_rect_depth = calib.rect_to_img(pts_rect)
-        val_flag_1 = np.logical_and(pts_img[:, 0] >= 0, pts_img[:, 0] < img_shape[1])
-        val_flag_2 = np.logical_and(pts_img[:, 1] >= 0, pts_img[:, 1] < img_shape[0])
+        val_flag_1 = np.logical_and(pts_img[:, 0] >= 0 - margin, pts_img[:, 0] < img_shape[1] + margin)
+        val_flag_2 = np.logical_and(pts_img[:, 1] >= 0 - margin, pts_img[:, 1] < img_shape[0] + margin)
         val_flag_merge = np.logical_and(val_flag_1, val_flag_2)
         pts_valid_flag = np.logical_and(val_flag_merge, pts_rect_depth >= 0)
 
         return pts_valid_flag
 
-    @staticmethod
-    def generate_prediction_dicts(batch_dict, pred_dicts, class_names, output_path=None):
+    def generate_prediction_dicts(self, batch_dict, pred_dicts, class_names, output_path=None):
         """
         Args:
             batch_dict:
@@ -178,6 +177,19 @@ class KittiDataset(DatasetTemplate):
 
             calib = batch_dict['calib'][batch_index]
             image_shape = batch_dict['image_shape'][batch_index].cpu().numpy()
+
+            if self.dataset_cfg.get('SHIFT_COOR', None):
+                pred_boxes[:, 0:3] -= self.dataset_cfg.SHIFT_COOR
+
+            # BOX FILTER
+            if self.dataset_cfg.get('TEST', None) and self.dataset_cfg.TEST.BOX_FILTER['FOV_FILTER']:
+                box_preds_lidar_center = pred_boxes[:, 0:3]
+                pts_rect = calib.lidar_to_rect(box_preds_lidar_center)
+                fov_flag = self.get_fov_flag(pts_rect, image_shape, calib, margin=5)
+                pred_boxes = pred_boxes[fov_flag]
+                pred_labels = pred_labels[fov_flag]
+                pred_scores = pred_scores[fov_flag]
+
             pred_boxes_camera = box_utils.boxes3d_lidar_to_kitti_camera(pred_boxes, calib)
             pred_boxes_img = box_utils.boxes3d_kitti_camera_to_imageboxes(
                 pred_boxes_camera, calib, image_shape=image_shape
@@ -262,6 +274,9 @@ class KittiDataset(DatasetTemplate):
             gt_boxes_camera = np.concatenate([loc, dims, rots[..., np.newaxis]], axis=1).astype(np.float32)
             gt_boxes_lidar = box_utils.boxes3d_kitti_camera_to_lidar(gt_boxes_camera, calib)
 
+            if self.dataset_cfg.get('SHIFT_COOR', None):
+                gt_boxes_lidar[:, 0:3] += self.dataset_cfg.SHIFT_COOR
+
             input_dict.update({
                 'gt_names': gt_names,
                 'gt_boxes': gt_boxes_lidar
@@ -269,9 +284,27 @@ class KittiDataset(DatasetTemplate):
             if "gt_boxes2d" in get_item_list:
                 input_dict['gt_boxes2d'] = annos["bbox"]
 
+
+            if self.dataset_cfg.get('REMOVE_ORIGIN_GTS', None) and self.training:
+                input_dict['points'] = box_utils.remove_points_in_boxes3d(input_dict['points'], input_dict['gt_boxes'])
+                mask = np.zeros(gt_boxes_lidar.shape[0], dtype=np.bool_)
+                input_dict['gt_boxes'] = input_dict['gt_boxes'][mask]
+                input_dict['gt_names'] = input_dict['gt_names'][mask]
+
+            if self.dataset_cfg.get('USE_PSEUDO_LABEL', None) and self.training:
+                input_dict['gt_boxes'] = None
+
+            # for debug only
+            # gt_boxes_mask = np.array([n in self.class_names for n in input_dict['gt_names']], dtype=np.bool_)
+            # debug_dict = {'gt_boxes': copy.deepcopy(gt_boxes_lidar[gt_boxes_mask])}
+
             road_plane = self.get_road_plane(sample_idx)
             if road_plane is not None:
                 input_dict['road_plane'] = road_plane
+
+        # load saved pseudo label for unlabel data
+        if self.dataset_cfg.get('USE_PSEUDO_LABEL', None) and self.training:
+            self.fill_pseudo_labels(input_dict)
 
         if "points" in get_item_list:
             points = self.get_lidar(self.root_split_path, sample_idx)
@@ -279,6 +312,10 @@ class KittiDataset(DatasetTemplate):
                 pts_rect = calib.lidar_to_rect(points[:, 0:3])
                 fov_flag = self.get_fov_flag(pts_rect, img_shape, calib)
                 points = points[fov_flag]
+
+            if self.dataset_cfg.get('SHIFT_COOR', None):
+                points[:, 0:3] += np.array(self.dataset_cfg.SHIFT_COOR, dtype=np.float32)
+
             input_dict['points'] = points
 
         if "images" in get_item_list:

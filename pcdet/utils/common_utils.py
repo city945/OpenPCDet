@@ -5,6 +5,7 @@ import random
 import shutil
 import subprocess
 import SharedArray
+import copy
 
 import numpy as np
 import torch
@@ -15,6 +16,8 @@ import torch.multiprocessing as mp
 def check_numpy_to_torch(x):
     if isinstance(x, np.ndarray):
         return torch.from_numpy(x).float(), True
+    if isinstance(x, np.float64) or isinstance(x, np.float32):
+        return torch.tensor([x]).float(), True
     return x, False
 
 
@@ -284,6 +287,32 @@ def sa_create(name, var):
     x.flags.writeable = False
     return x
 
+def add_prefix_to_dict(dict, prefix):
+    for key in list(dict.keys()):
+        dict[prefix + key] = dict.pop(key)
+    return dict
+
+
+class DataReader(object):
+    def __init__(self, dataloader, sampler):
+        self.dataloader = dataloader
+        self.sampler = sampler
+
+    def construct_iter(self):
+        self.dataloader_iter = iter(self.dataloader)
+
+    def set_cur_epoch(self, cur_epoch):
+        self.cur_epoch = cur_epoch
+
+    def read_data(self):
+        try:
+            return self.dataloader_iter.next()
+        except:
+            if self.sampler is not None:
+                self.sampler.set_epoch(self.cur_epoch)
+            self.construct_iter()
+            return self.dataloader_iter.next()
+
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -301,3 +330,65 @@ class AverageMeter(object):
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count
+
+
+def set_bn_train(m):
+    classname = m.__class__.__name__
+    if classname.find('BatchNorm') != -1:
+        m.train()
+
+
+class NAverageMeter(object):
+    """
+    Contain N AverageMeter and update respectively or simultaneously
+    """
+    def __init__(self, n):
+        self.n = n
+        self.meters = [AverageMeter() for i in range(n)]
+
+    def update(self, val, index=None, attribute='avg'):
+        if isinstance(val, list) and index is None:
+            assert len(val) == self.n
+            for i in range(self.n):
+                self.meters[i].update(val[i])
+        elif isinstance(val, NAverageMeter) and index is None:
+            assert val.n == self.n
+            for i in range(self.n):
+                self.meters[i].update(getattr(val.meters[i], attribute))
+        elif not isinstance(val, list) and index is not None:
+            self.meters[index].update(val)
+        else:
+            raise ValueError
+
+    def aggregate_result(self):
+        result = "("
+        for i in range(self.n):
+            result += "{:.3f},".format(self.meters[i].avg)
+        result += ')'
+        return result
+
+
+def calculate_gradient_norm(model):
+    total_norm = 0
+    for p in model.parameters():
+        param_norm = p.grad.data.norm(2)
+        total_norm += param_norm.item() ** 2
+    total_norm = total_norm ** (1. / 2)
+    return total_norm
+
+
+def mask_dict(result_dict, mask):
+    new_dict = copy.deepcopy(result_dict)
+    for key, value in new_dict.items():
+        new_dict[key] = value[mask]
+    return new_dict
+
+
+def concatenate_array_inside_dict(merged_dict, result_dict):
+    for key, val in result_dict.items():
+        if key not in merged_dict:
+            merged_dict[key] = copy.deepcopy(val)
+        else:
+            merged_dict[key] = np.concatenate([merged_dict[key], copy.deepcopy(val)])
+
+    return merged_dict

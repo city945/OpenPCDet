@@ -1,3 +1,4 @@
+import copy
 from collections import defaultdict
 from pathlib import Path
 
@@ -5,10 +6,11 @@ import numpy as np
 import torch
 import torch.utils.data as torch_data
 
-from ..utils import common_utils
+from ..utils import common_utils, box_utils, self_training_utils
 from .augmentor.data_augmentor import DataAugmentor
 from .processor.data_processor import DataProcessor
 from .processor.point_feature_encoder import PointFeatureEncoder
+from ..ops.roiaware_pool3d import roiaware_pool3d_utils
 import pickle
 
 
@@ -108,6 +110,9 @@ class DatasetTemplate(torch_data.Dataset):
             if pred_scores.shape[0] == 0:
                 return pred_dict
 
+            if self.dataset_cfg.get('SHIFT_COOR', None):
+                pred_boxes[:, 0:3] -= self.dataset_cfg.SHIFT_COOR
+
             pred_dict['name'] = np.array(class_names)[pred_labels - 1]
             pred_dict['score'] = pred_scores
             pred_dict['boxes_lidar'] = pred_boxes
@@ -124,6 +129,100 @@ class DatasetTemplate(torch_data.Dataset):
             annos.append(single_pred_dict)
 
         return annos
+
+    @staticmethod
+    def __vis__(points, gt_boxes, ref_boxes=None, scores=None, use_fakelidar=False):
+        import visual_utils.visualize_utils as vis
+        import mayavi.mlab as mlab
+        gt_boxes = copy.deepcopy(gt_boxes)
+        if use_fakelidar:
+            gt_boxes = box_utils.boxes3d_kitti_lidar_to_fakelidar(gt_boxes)
+
+        if ref_boxes is not None:
+            ref_boxes = copy.deepcopy(ref_boxes)
+            if use_fakelidar:
+                ref_boxes = box_utils.boxes3d_kitti_lidar_to_fakelidar(ref_boxes)
+
+        vis.draw_scenes(points, gt_boxes, ref_boxes=ref_boxes, ref_scores=scores)
+        mlab.show(stop=True)
+
+    @staticmethod
+    def __vis_fake__(points, gt_boxes, ref_boxes=None, scores=None, use_fakelidar=True):
+        import visual_utils.visualize_utils as vis
+        import mayavi.mlab as mlab
+        gt_boxes = copy.deepcopy(gt_boxes)
+        if use_fakelidar:
+            gt_boxes = box_utils.boxes3d_kitti_lidar_to_fakelidar(gt_boxes)
+
+        if ref_boxes is not None:
+            ref_boxes = copy.deepcopy(ref_boxes)
+            if use_fakelidar:
+                ref_boxes = box_utils.boxes3d_kitti_lidar_to_fakelidar(ref_boxes)
+
+        vis.draw_scenes(points, gt_boxes, ref_boxes=ref_boxes, ref_scores=scores)
+        mlab.show(stop=True)
+
+    @staticmethod
+    def extract_fov_data(points, fov_degree, heading_angle):
+        """
+        Args:
+            points: (N, 3 + C)
+            fov_degree: [0~180]
+            heading_angle: [0~360] in lidar coords, 0 is the x-axis, increase clockwise
+        Returns:
+        """
+        half_fov_degree = fov_degree / 180 * np.pi / 2
+        heading_angle = -heading_angle / 180 * np.pi
+        points_new = common_utils.rotate_points_along_z(
+            points.copy()[np.newaxis, :, :], np.array([heading_angle])
+        )[0]
+        angle = np.arctan2(points_new[:, 1], points_new[:, 0])
+        fov_mask = ((np.abs(angle) < half_fov_degree) & (points_new[:, 0] > 0))
+        points = points_new[fov_mask]
+        return points
+
+    @staticmethod
+    def extract_fov_gt(gt_boxes, fov_degree, heading_angle):
+        """
+        Args:
+            anno_dict:
+            fov_degree: [0~180]
+            heading_angle: [0~360] in lidar coords, 0 is the x-axis, increase clockwise
+        Returns:
+        """
+        half_fov_degree = fov_degree / 180 * np.pi / 2
+        heading_angle = -heading_angle / 180 * np.pi
+        gt_boxes_lidar = copy.deepcopy(gt_boxes)
+        gt_boxes_lidar = common_utils.rotate_points_along_z(
+            gt_boxes_lidar[np.newaxis, :, :], np.array([heading_angle])
+        )[0]
+        gt_boxes_lidar[:, 6] += heading_angle
+        gt_angle = np.arctan2(gt_boxes_lidar[:, 1], gt_boxes_lidar[:, 0])
+        fov_gt_mask = ((np.abs(gt_angle) < half_fov_degree) & (gt_boxes_lidar[:, 0] > 0))
+        return fov_gt_mask
+
+    def fill_pseudo_labels(self, input_dict):
+        gt_boxes = self_training_utils.load_ps_label(input_dict['frame_id'])
+        gt_scores = gt_boxes[:, 8]
+        gt_classes = gt_boxes[:, 7]
+        gt_boxes = gt_boxes[:, :7]
+
+        # only suitable for only one classes, generating gt_names for prepare data
+        gt_names = np.array(self.class_names)[np.abs(gt_classes.astype(np.int32)) - 1]
+
+        input_dict['gt_boxes'] = gt_boxes
+        input_dict['gt_names'] = gt_names
+        input_dict['gt_classes'] = gt_classes
+        input_dict['gt_scores'] = gt_scores
+        input_dict['pos_ps_bbox'] = np.zeros((len(self.class_names)), dtype=np.float32)
+        input_dict['ign_ps_bbox'] = np.zeros((len(self.class_names)), dtype=np.float32)
+        for i in range(len(self.class_names)):
+            num_total_boxes = (np.abs(gt_classes) == (i+1)).sum()
+            num_ps_bbox = (gt_classes == (i+1)).sum()
+            input_dict['pos_ps_bbox'][i] = num_ps_bbox
+            input_dict['ign_ps_bbox'][i] = num_total_boxes - num_ps_bbox
+
+        input_dict.pop('num_points_in_gt', None)
 
     def merge_all_iters_to_one_epoch(self, merge=True, epochs=None):
         if merge:
@@ -195,6 +294,20 @@ class DatasetTemplate(torch_data.Dataset):
                 ...
         """
         if self.training:
+            # filter gt_boxes without points
+            num_points_in_gt = data_dict.get('num_points_in_gt', None)
+            if num_points_in_gt is None:
+                num_points_in_gt = roiaware_pool3d_utils.points_in_boxes_cpu(
+                    torch.from_numpy(data_dict['points'][:, :3]),
+                    torch.from_numpy(data_dict['gt_boxes'][:, :7])).numpy().sum(axis=1)
+
+            mask = (num_points_in_gt >= self.dataset_cfg.get('MIN_POINTS_OF_GT', 1))
+            data_dict['gt_boxes'] = data_dict['gt_boxes'][mask]
+            data_dict['gt_names'] = data_dict['gt_names'][mask]
+            if 'gt_classes' in data_dict:
+                data_dict['gt_classes'] = data_dict['gt_classes'][mask]
+                data_dict['gt_scores'] = data_dict['gt_scores'][mask]
+
             assert 'gt_boxes' in data_dict, 'gt_boxes should be provided for training'
             gt_boxes_mask = np.array([n in self.class_names for n in data_dict['gt_names']], dtype=np.bool_)
             
@@ -213,7 +326,12 @@ class DatasetTemplate(torch_data.Dataset):
             selected = common_utils.keep_arrays_by_name(data_dict['gt_names'], self.class_names)
             data_dict['gt_boxes'] = data_dict['gt_boxes'][selected]
             data_dict['gt_names'] = data_dict['gt_names'][selected]
-            gt_classes = np.array([self.class_names.index(n) + 1 for n in data_dict['gt_names']], dtype=np.int32)
+            # for pseudo label has ignore labels.
+            if 'gt_classes' not in data_dict:
+                gt_classes = np.array([self.class_names.index(n) + 1 for n in data_dict['gt_names']], dtype=np.int32)
+            else:
+                gt_classes = data_dict['gt_classes'][selected]
+                data_dict['gt_scores'] = data_dict['gt_scores'][selected]
             gt_boxes = np.concatenate((data_dict['gt_boxes'], gt_classes.reshape(-1, 1).astype(np.float32)), axis=1)
             data_dict['gt_boxes'] = gt_boxes
 
@@ -232,6 +350,7 @@ class DatasetTemplate(torch_data.Dataset):
             return self.__getitem__(new_index)
 
         data_dict.pop('gt_names', None)
+        data_dict.pop('gt_classes', None)
 
         return data_dict
 
@@ -333,6 +452,12 @@ class DatasetTemplate(torch_data.Dataset):
                     ret[key] = np.stack(points, axis=0)
                 elif key in ['camera_imgs']:
                     ret[key] = torch.stack([torch.stack(imgs,dim=0) for imgs in val],dim=0)
+                elif key in ['gt_scores']:
+                    max_gt = max([len(x) for x in val])
+                    batch_scores = np.zeros((batch_size, max_gt), dtype=np.float32)
+                    for k in range(batch_size):
+                        batch_scores[k, :val[k].__len__()] = val[k]
+                    ret[key] = batch_scores
                 else:
                     ret[key] = np.stack(val, axis=0)
             except:
@@ -341,3 +466,11 @@ class DatasetTemplate(torch_data.Dataset):
 
         ret['batch_size'] = batch_size * batch_size_ratio
         return ret
+
+    def eval(self):
+        self.training = False
+        self.data_processor.eval()
+
+    def train(self):
+        self.training = True
+        self.data_processor.train()
