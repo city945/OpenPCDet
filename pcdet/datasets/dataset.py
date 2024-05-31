@@ -9,6 +9,7 @@ from ..utils import common_utils
 from .augmentor.data_augmentor import DataAugmentor
 from .processor.data_processor import DataProcessor
 from .processor.point_feature_encoder import PointFeatureEncoder
+import pickle
 
 
 class DatasetTemplate(torch_data.Dataset):
@@ -45,6 +46,23 @@ class DatasetTemplate(torch_data.Dataset):
             self.depth_downsample_factor = self.data_processor.depth_downsample_factor
         else:
             self.depth_downsample_factor = None
+            
+    def load_infos(self, mode):
+        if self.logger is not None:
+            self.logger.info('Loading dataset')
+        infos = []
+
+        for info_path in self.dataset_cfg.INFO_PATH[mode]:
+            info_path = self.root_path / info_path
+            if not info_path.exists():
+                continue
+            with open(info_path, 'rb') as f:
+                infos.extend(pickle.load(f))
+
+        self.infos = infos[:16] if self.dataset_cfg.get("DEBUG", False) else infos
+        if self.logger is not None:
+            self.logger.info('Total samples : %d' % (len(self.infos)))
+
             
     @property
     def mode(self):
