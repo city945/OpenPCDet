@@ -1,4 +1,6 @@
 import numpy as np
+from pcdet.ops.roiaware_pool3d import roiaware_pool3d_utils
+import torch
 
 def transform_matrix(rotation_mat, translation, inverse: bool = False) -> np.ndarray:
     """
@@ -16,3 +18,14 @@ def transform_matrix(rotation_mat, translation, inverse: bool = False) -> np.nda
         tm[:3, 3] = np.transpose(np.array(translation))
 
     return tm
+
+def replace_gt(raw_points, raw_boxes3d, mix_points, mix_boxes3d):
+    raw_point_indices = roiaware_pool3d_utils.points_in_boxes_cpu(
+        torch.from_numpy(raw_points[:, 0:3]), torch.from_numpy(raw_boxes3d[:, :7])
+    ).numpy()
+    mix_point_indices = roiaware_pool3d_utils.points_in_boxes_cpu(
+        torch.from_numpy(mix_points[:, 0:3]), torch.from_numpy(mix_boxes3d[:, :7])
+    ).numpy()
+    points = raw_points[np.sum(raw_point_indices, axis=0) == 0]
+    points = np.vstack((mix_points[np.sum(mix_point_indices, axis=0) > 0], points))
+    return points

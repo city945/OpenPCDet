@@ -39,7 +39,17 @@ class DataBaseSampler(object):
 
             with open(str(db_info_path), 'rb') as f:
                 infos = pickle.load(f)
-                [self.db_infos[cur_class].extend(infos[cur_class]) for cur_class in class_names]
+            if sampler_cfg.get('MIX_GT', None) and sampler_cfg.MIX_GT.MIX_TYPE == 'append':
+                path_prefix = f"../{sampler_cfg.MIX_GT.SENSOR}"
+                db_info_path = os.path.join(self.root_path.resolve() / path_prefix, db_info_path.name)
+                infos = pickle.load(open(db_info_path, 'rb'))
+                for cur_class in infos.keys():
+                    for info in infos[cur_class]:
+                        info['path'] = os.path.join(path_prefix, info['path'])
+                sampler_cfg.LIMIT_WHOLE_SCENE = False
+                sampler_cfg.SAMPLE_GROUPS = sampler_cfg.MIX_GT.NEW_SAMPLE_GROUPS
+            
+            [self.db_infos[cur_class].extend(infos[cur_class]) for cur_class in class_names]
 
         for func_name, val in sampler_cfg.PREPARE.items():
             self.db_infos = getattr(self, func_name)(self.db_infos, val)
