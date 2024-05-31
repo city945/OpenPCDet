@@ -202,7 +202,7 @@ class OpenPCDetWaymoDetectionMetricsEstimator(tf.test.TestCase):
         print('Number: (pd, %d) VS. (gt, %d)' % (len(pd_boxes3d), len(gt_boxes3d)))
         print('Level 1: %d, Level2: %d)' % ((gt_difficulty == 1).sum(), (gt_difficulty == 2).sum()))
 
-        if pd_score.max() > 1:
+        if pd_score.shape[0] > 0 and pd_score.max() > 1:
             # assert pd_score.max() <= 1.0, 'Waymo evaluation only supports normalized scores'
             pd_score = 1 / (1 + np.exp(-pd_score))
             print('Warning: Waymo evaluation only supports normalized scores')

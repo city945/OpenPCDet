@@ -294,19 +294,19 @@ def filter_data(gt_anno, pred_anno, difficulty_mode, difficulty_level, class_nam
     pred_flag[reject] = -1
 
     if difficulty_mode == 'Overall':
-        ignore = overall_filter(gt_anno['boxes_3d'])
+        ignore = overall_filter(gt_anno['gt_boxes_lidar'])
         gt_flag[ignore] = 1
-        ignore = overall_filter(pred_anno['boxes_3d'])
+        ignore = overall_filter(pred_anno['boxes_lidar'])
         pred_flag[ignore] = 1
     elif difficulty_mode == 'Distance':
-        ignore = distance_filter(gt_anno['boxes_3d'], difficulty_level)
+        ignore = distance_filter(gt_anno['gt_boxes_lidar'], difficulty_level)
         gt_flag[ignore] = 1
-        ignore = distance_filter(pred_anno['boxes_3d'], difficulty_level)
+        ignore = distance_filter(pred_anno['boxes_lidar'], difficulty_level)
         pred_flag[ignore] = 1
     elif difficulty_mode == 'Overall&Distance':
-        ignore = overall_distance_filter(gt_anno['boxes_3d'], difficulty_level)
+        ignore = overall_distance_filter(gt_anno['gt_boxes_lidar'], difficulty_level)
         gt_flag[ignore] = 1
-        ignore = overall_distance_filter(pred_anno['boxes_3d'], difficulty_level)
+        ignore = overall_distance_filter(pred_anno['boxes_lidar'], difficulty_level)
         pred_flag[ignore] = 1
     else:
         raise NotImplementedError
@@ -401,8 +401,8 @@ def compute_iou3d(gt_annos, pred_annos, split_parts, with_heading):
         gt_annos_part = gt_annos[sample_idx:sample_idx + num_part_samples]
         pred_annos_part = pred_annos[sample_idx:sample_idx + num_part_samples]
 
-        gt_boxes = np.concatenate([anno["boxes_3d"] for anno in gt_annos_part], 0)
-        pred_boxes = np.concatenate([anno["boxes_3d"] for anno in pred_annos_part], 0)
+        gt_boxes = np.concatenate([anno["gt_boxes_lidar"] for anno in gt_annos_part], 0)
+        pred_boxes = np.concatenate([anno["boxes_lidar"] for anno in pred_annos_part], 0)
 
         if with_heading:
             iou3d_part = iou3d_kernel_with_heading(gt_boxes, pred_boxes)

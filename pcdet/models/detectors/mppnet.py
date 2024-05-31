@@ -6,7 +6,6 @@ import numpy as np
 import time
 from ...utils import common_utils
 from ..model_utils import model_nms_utils
-from pcdet.datasets.augmentor import augmentor_utils, database_sampler
 
 
 class MPPNet(Detector3DTemplate):
