@@ -7,6 +7,7 @@ from ...utils import common_utils
 from ...utils import box_utils
 from ...ops.roiaware_pool3d import roiaware_pool3d_utils
 from ...ops.iou3d_nms import iou3d_nms_utils
+from ...utils import downsample_utils
 
 import warnings
 try:
@@ -900,3 +901,24 @@ def rotate_objects(gt_boxes, points, gt_boxes_mask, rotation_perturb, prob, num_
         gt_boxes[idx] = rot_box[try_idx]
 
     return gt_boxes, points
+
+def label_point_cloud_beam(polar_image, beam=32):
+    if polar_image.shape[0] <= beam:
+        print("too small point cloud!")
+        return np.arange(polar_image.shape[0])
+    beam_label, centroids = downsample_utils.beam_label(polar_image[:,1], beam)
+    idx = np.argsort(centroids)
+    rev_idx = np.zeros_like(idx)
+    for i, t in enumerate(idx):
+        rev_idx[t] = i
+    beam_label = rev_idx[beam_label]
+    return beam_label
+
+def get_polar_image(points):
+    theta, phi = downsample_utils.compute_angles(points[:,:3])
+    r = np.sqrt(np.sum(points[:,:3]**2, axis=1))
+    polar_image = points.copy()
+    polar_image[:,0] = phi 
+    polar_image[:,1] = theta
+    polar_image[:,2] = r 
+    return polar_image
