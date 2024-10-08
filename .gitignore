@@ -15,3 +15,13 @@ venv/
 *.bin
 output
 version.py
+
+.trash
+.vscode
+data
+model_zoo
+output
+thirdparty
+pyrightconfig.json
+
+!*.yaml
