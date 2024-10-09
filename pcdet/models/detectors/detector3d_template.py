@@ -362,7 +362,8 @@ class Detector3DTemplate(nn.Module):
         if not os.path.isfile(filename):
             raise FileNotFoundError
 
-        logger.info('==> Loading parameters from checkpoint %s to %s' % (filename, 'CPU' if to_cpu else 'GPU'))
+        if logger:
+            logger.info('==> Loading parameters from checkpoint %s to %s' % (filename, 'CPU' if to_cpu else 'GPU'))
         loc_type = torch.device('cpu') if to_cpu else None
         checkpoint = torch.load(filename, map_location=loc_type)
         model_state_disk = checkpoint['model_state']
@@ -372,22 +373,22 @@ class Detector3DTemplate(nn.Module):
             model_state_disk.update(pretrain_model_state_disk)
             
         version = checkpoint.get("version", None)
-        if version is not None:
+        if version is not None and logger is not None:
             logger.info('==> Checkpoint trained from version: %s' % version)
 
         state_dict, update_model_state = self._load_state_dict(model_state_disk, strict=False)
 
         for key in state_dict:
-            if key not in update_model_state:
+            if key not in update_model_state and logger is not None:
                 logger.info('Not updated weight %s: %s' % (key, str(state_dict[key].shape)))
 
-        logger.info('==> Done (loaded %d/%d)' % (len(update_model_state), len(state_dict)))
+        if logger:
+            logger.info('==> Done (loaded %d/%d)' % (len(update_model_state), len(state_dict)))
 
     def load_params_with_optimizer(self, filename, to_cpu=False, optimizer=None, logger=None):
         if not os.path.isfile(filename):
             raise FileNotFoundError
 
-        logger.info('==> Loading parameters from checkpoint %s to %s' % (filename, 'CPU' if to_cpu else 'GPU'))
         loc_type = torch.device('cpu') if to_cpu else None
         checkpoint = torch.load(filename, map_location=loc_type)
         epoch = checkpoint.get('epoch', -1)
@@ -397,8 +398,6 @@ class Detector3DTemplate(nn.Module):
 
         if optimizer is not None:
             if 'optimizer_state' in checkpoint and checkpoint['optimizer_state'] is not None:
-                logger.info('==> Loading optimizer parameters from checkpoint %s to %s'
-                            % (filename, 'CPU' if to_cpu else 'GPU'))
                 optimizer.load_state_dict(checkpoint['optimizer_state'])
             else:
                 assert filename[-4] == '.', filename
@@ -410,6 +409,5 @@ class Detector3DTemplate(nn.Module):
 
         if 'version' in checkpoint:
             print('==> Checkpoint trained from version: %s' % checkpoint['version'])
-        logger.info('==> Done')
 
         return it, epoch

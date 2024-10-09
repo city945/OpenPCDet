@@ -127,7 +127,7 @@ class ThreeInterpolate(Function):
         ctx.three_interpolate_for_backward = (idx, weight, m)
         output = torch.cuda.FloatTensor(B, c, n)
 
-        pointnet2.three_interpolate_wrapper(B, c, m, n, features, idx, weight, output)
+        pointnet2.three_interpolate_wrapper(B, c, m, n, features.float(), idx, weight, output)
         return output
 
     @staticmethod
@@ -171,7 +171,7 @@ class GroupingOperation(Function):
         _, C, N = features.size()
         output = torch.cuda.FloatTensor(B, C, nfeatures, nsample)
 
-        pointnet2.group_points_wrapper(B, C, N, nfeatures, nsample, features, idx, output)
+        pointnet2.group_points_wrapper(B, C, N, nfeatures, nsample, features.float(), idx, output)
 
         ctx.for_backwards = (idx, N)
         return output

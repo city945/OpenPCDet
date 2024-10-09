@@ -203,6 +203,14 @@ def init_dist_pytorch(tcp_port, local_rank, backend='nccl'):
     rank = dist.get_rank()
     return num_gpus, rank
 
+def init_dist_pytorch_v1_10(backend='nccl'):
+    dist.init_process_group(backend=backend)
+    
+    rank = dist.get_rank()
+    num_gpus = torch.cuda.device_count()
+    torch.cuda.set_device(rank % num_gpus)
+
+    return num_gpus, rank
 
 def get_dist_info(return_gpu_per_machine=False):
     if torch.__version__ < '1.0':
